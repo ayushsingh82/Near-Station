@@ -15,7 +15,7 @@ const Landing: React.FC = () => {
         {/* Branding & Headline */}
         <div className="inline-block mb-2">
           <span className="text-xs font-mono tracking-widest border border-[#CC4420] text-white px-3 py-1.5 rounded mb-4">
-            NEAR INTENTS HELPER
+            NEARINTENTS-HELPER
           </span>
         </div>
 

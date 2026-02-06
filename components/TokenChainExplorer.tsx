@@ -70,28 +70,37 @@ function getUniqueChains(pairs: SupportedPair[]): string[] {
 
 export default function TokenChainExplorer() {
   const [schema, setSchema] = useState<TokenListSchema | null>(null);
+  const [apiTokens, setApiTokens] = useState<{ symbol: string; blockchain: string; contractAddress?: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [selectedToken, setSelectedToken] = useState<string>('');
-  const [selectedChain, setSelectedChain] = useState<string>('');
+  const [sourceChain, setSourceChain] = useState<string>('');
+  const [sourceToken, setSourceToken] = useState<string>('');
+  const [destChain, setDestChain] = useState<string>('');
+  const [destToken, setDestToken] = useState<string>('');
 
   React.useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
-        const res = await fetch(TOKENLIST_PATH);
-        if (!res.ok) {
-          if (res.status === 404) {
+        const [listRes, apiRes] = await Promise.all([
+          fetch(TOKENLIST_PATH),
+          fetch('/api/tokens'),
+        ]);
+        if (!listRes.ok) {
+          if (listRes.status === 404) {
             const schemaRes = await fetch('/data/tokenlist.schema.json');
             if (!schemaRes.ok) throw new Error('Token list not found');
             const data: TokenListSchema = await schemaRes.json();
             if (!cancelled) setSchema(data);
-            return;
-          }
-          throw new Error(`HTTP ${res.status}`);
+          } else throw new Error(`HTTP ${listRes.status}`);
+        } else {
+          const data: TokenListSchema = await listRes.json();
+          if (!cancelled) setSchema(data);
         }
-        const data: TokenListSchema = await res.json();
-        if (!cancelled) setSchema(data);
+        if (!cancelled && apiRes.ok) {
+          const apiList: { symbol: string; blockchain: string; contractAddress?: string }[] = await apiRes.json();
+          if (Array.isArray(apiList)) setApiTokens(apiList);
+        }
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load token list');
       } finally {
@@ -102,18 +111,90 @@ export default function TokenChainExplorer() {
     return () => { cancelled = true; };
   }, []);
 
-  const { pairs, tokens, chains, filteredPairs } = useMemo(() => {
-    if (!schema?.tokens?.length) {
-      return { pairs: [], tokens: [], chains: [], filteredPairs: [] };
+  const [showFinal, setShowFinal] = useState(false);
+
+  const { tokens, pairs, chainsForToken } = useMemo(() => {
+    const fromSchema = schema?.tokens?.length
+      ? getUniqueTokens(schema.tokens)
+      : [];
+    const fromApi = apiTokens
+      .filter((t) => t.symbol)
+      .map((t) => ({ symbol: t.symbol, label: t.symbol }));
+    const seen = new Set<string>();
+    const merged: { symbol: string; label: string }[] = [];
+    for (const t of fromSchema) {
+      if (!seen.has(t.symbol)) {
+        seen.add(t.symbol);
+        merged.push(t);
+      }
     }
-    const pairs = collectPairs(schema.tokens);
-    const tokens = getUniqueTokens(schema.tokens);
-    const chains = getUniqueChains(pairs);
-    let filtered = pairs;
-    if (selectedToken) filtered = filtered.filter((p) => p.symbol === selectedToken);
-    if (selectedChain) filtered = filtered.filter((p) => p.chainName === selectedChain);
-    return { pairs, tokens, chains, filteredPairs: filtered };
-  }, [schema, selectedToken, selectedChain]);
+    for (const t of fromApi) {
+      if (!seen.has(t.symbol)) {
+        seen.add(t.symbol);
+        merged.push(t);
+      }
+    }
+    merged.sort((a, b) => a.symbol.localeCompare(b.symbol));
+    const pairs = schema?.tokens?.length ? collectPairs(schema.tokens) : [];
+    const allChains = getUniqueChains(pairs);
+    const getChainsForSymbol = (symbol: string) => {
+      if (!symbol) return [];
+      const chainSet = new Set(
+        pairs
+          .filter((p) => p.symbol.toUpperCase() === symbol.toUpperCase())
+          .map((p) => p.chainName)
+      );
+      const list = Array.from(chainSet).sort();
+      return list.length > 0 ? list : allChains;
+    };
+    return { tokens: merged, pairs, allChains, chainsForToken: getChainsForSymbol };
+  }, [schema, apiTokens]);
+
+  const sourceChains = useMemo(
+    () => (sourceToken ? chainsForToken(sourceToken) : []),
+    [chainsForToken, sourceToken]
+  );
+  const destChains = useMemo(
+    () => (destToken ? chainsForToken(destToken) : []),
+    [chainsForToken, destToken]
+  );
+
+  const chainMatches = (apiChain: string, selectedChain: string): boolean => {
+    const a = (apiChain || '').toLowerCase();
+    const b = (selectedChain || '').toLowerCase();
+    if (a === b) return true;
+    const aliases: Record<string, string[]> = {
+      eth: ['ethereum'],
+      solana: ['sol'],
+      near: ['near protocol'],
+    };
+    for (const [k, vals] of Object.entries(aliases)) {
+      if ((a === k || vals.includes(a)) && (b === k || vals.includes(b))) return true;
+    }
+    return false;
+  };
+
+  const getAddress = (symbol: string, chainName: string): string => {
+    const sym = (symbol || '').toUpperCase();
+    const ch = (chainName || '').toLowerCase();
+    const p = pairs.find(
+      (x) => x.symbol.toUpperCase() === sym && x.chainName.toLowerCase() === ch
+    );
+    if (p) return p.type === 'native' ? 'native' : p.address ?? '';
+    const fromApi = apiTokens.find(
+      (t) =>
+        (t.symbol || '').toUpperCase() === sym &&
+        chainMatches(t.blockchain, chainName) &&
+        t.contractAddress
+    );
+    return fromApi?.contractAddress ?? '';
+  };
+
+  const sourceAddress = getAddress(sourceToken, sourceChain);
+  const destAddress = getAddress(destToken, destChain);
+  const canShowFinal =
+    sourceToken && sourceChain && destToken && destChain;
+  const showAddresses = showFinal && canShowFinal;
 
   if (loading) {
     return (
@@ -130,111 +211,159 @@ export default function TokenChainExplorer() {
     );
   }
 
+  const selectClass = 'w-full bg-[#0A0A0A] border border-zinc-600 rounded px-3 py-2 text-white focus:border-[#CC4420] focus:outline-none';
+  const labelClass = 'block text-xs font-medium text-zinc-400 mb-1';
+
+  const handleSourceTokenChange = (symbol: string) => {
+    setSourceToken(symbol);
+    setSourceChain('');
+    setShowFinal(false);
+  };
+  const handleSourceChainChange = (chain: string) => {
+    setSourceChain(chain);
+    setShowFinal(false);
+  };
+  const handleDestTokenChange = (symbol: string) => {
+    setDestToken(symbol);
+    setDestChain('');
+    setShowFinal(false);
+  };
+  const handleDestChainChange = (chain: string) => {
+    setDestChain(chain);
+    setShowFinal(false);
+  };
+
+  const copySvg = (
+    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" className="inline-block">
+      <rect x="5" y="5" width="9" height="9" rx="1" />
+      <rect x="2" y="2" width="9" height="9" rx="1" />
+    </svg>
+  );
+
   return (
-    <div className="space-y-6">
-      <div className="rounded border border-zinc-700 bg-zinc-900/30 p-4">
-        <h2 className="text-lg font-medium text-white mb-3">Check supported pairs</h2>
-        <p className="text-zinc-400 text-sm mb-4">
-          Select a token and/or chain to see which token–chain pairs are supported.
-        </p>
-        <div className="flex flex-wrap gap-4 items-end">
-          <div className="min-w-[200px]">
-            <label className="block text-xs font-medium text-zinc-400 mb-1">Token</label>
-            <select
-              value={selectedToken}
-              onChange={(e) => setSelectedToken(e.target.value)}
-              className="w-full bg-[#0A0A0A] border border-zinc-600 rounded px-3 py-2 text-white focus:border-[#CC4420] focus:outline-none"
-            >
-              <option value="">All tokens</option>
-              {tokens.map((t) => (
-                <option key={t.symbol} value={t.symbol}>
-                  {t.label}
+    <div className="rounded border border-zinc-700 bg-zinc-900/30 p-5 space-y-5">
+      <div className="flex flex-wrap gap-8">
+        <div className="min-w-[220px]">
+          <h3 className="text-sm font-medium text-zinc-300 mb-3">Source</h3>
+          <div className="space-y-3">
+            <div>
+              <label className={labelClass}>1. Token</label>
+              <select
+                value={sourceToken}
+                onChange={(e) => handleSourceTokenChange(e.target.value)}
+                className={selectClass}
+              >
+                <option value="">Select token</option>
+                {tokens.map((t) => (
+                  <option key={t.symbol} value={t.symbol}>{t.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={labelClass}>2. Chain (where it’s available)</label>
+              <select
+                value={sourceChain}
+                onChange={(e) => handleSourceChainChange(e.target.value)}
+                className={selectClass}
+                disabled={!sourceToken}
+              >
+                <option value="">
+                  {sourceToken ? 'Select chain' : 'Select token first'}
                 </option>
-              ))}
-            </select>
+                {sourceChains.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
           </div>
-          <div className="min-w-[200px]">
-            <label className="block text-xs font-medium text-zinc-400 mb-1">Chain</label>
-            <select
-              value={selectedChain}
-              onChange={(e) => setSelectedChain(e.target.value)}
-              className="w-full bg-[#0A0A0A] border border-zinc-600 rounded px-3 py-2 text-white focus:border-[#CC4420] focus:outline-none"
-            >
-              <option value="">All chains</option>
-              {chains.map((c) => (
-                <option key={c} value={c}>
-                  {c}
+        </div>
+        <div className="min-w-[220px]">
+          <h3 className="text-sm font-medium text-zinc-300 mb-3">Destination</h3>
+          <div className="space-y-3">
+            <div>
+              <label className={labelClass}>1. Token</label>
+              <select
+                value={destToken}
+                onChange={(e) => handleDestTokenChange(e.target.value)}
+                className={selectClass}
+              >
+                <option value="">Select token</option>
+                {tokens.map((t) => (
+                  <option key={t.symbol} value={t.symbol}>{t.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={labelClass}>2. Chain (where it’s available)</label>
+              <select
+                value={destChain}
+                onChange={(e) => handleDestChainChange(e.target.value)}
+                className={selectClass}
+                disabled={!destToken}
+              >
+                <option value="">
+                  {destToken ? 'Select chain' : 'Select token first'}
                 </option>
-              ))}
-            </select>
+                {destChains.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
+              </select>
+            </div>
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              setSelectedToken('');
-              setSelectedChain('');
-            }}
-            className="px-3 py-2 border border-zinc-600 rounded text-zinc-300 hover:bg-zinc-800 text-sm"
-          >
-            Clear filters
-          </button>
         </div>
       </div>
 
-      <div className="rounded border border-zinc-700 overflow-hidden">
-        <div className="px-4 py-2 border-b border-zinc-700 bg-zinc-900/50 flex justify-between items-center">
-          <span className="text-sm font-medium text-zinc-300">
-            Supported pairs
-            {(selectedToken || selectedChain) && (
-              <span className="text-zinc-500 font-normal ml-2">
-                ({filteredPairs.length} of {pairs.length})
-              </span>
-            )}
-          </span>
-          {!selectedToken && !selectedChain && (
-            <span className="text-xs text-zinc-500">{pairs.length} total pairs</span>
-          )}
+      {canShowFinal && (
+        <div className="pt-2 border-t border-zinc-700">
+          <button
+            type="button"
+            onClick={() => setShowFinal(true)}
+            className="px-4 py-2 rounded bg-[#CC4420] text-white font-medium hover:opacity-90 transition-opacity"
+          >
+            Final
+          </button>
         </div>
-        <div className="overflow-x-auto max-h-[420px] overflow-y-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="sticky top-0 bg-zinc-900/95 border-b border-zinc-700">
-              <tr>
-                <th className="px-4 py-3 font-medium text-zinc-300">Symbol</th>
-                <th className="px-4 py-3 font-medium text-zinc-300">Name</th>
-                <th className="px-4 py-3 font-medium text-zinc-300">Chain</th>
-                <th className="px-4 py-3 font-medium text-zinc-300">Origin chain</th>
-                <th className="px-4 py-3 font-medium text-zinc-300">Bridge</th>
-                <th className="px-4 py-3 font-medium text-zinc-300">Address</th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredPairs.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="px-4 py-8 text-center text-zinc-500">
-                    No pairs match the selected filters.
-                  </td>
-                </tr>
-              ) : (
-                filteredPairs.map((p, i) => (
-                  <tr
-                    key={`${p.defuseAssetId}-${p.chainName}-${i}`}
-                    className="border-b border-zinc-800 hover:bg-zinc-800/30"
-                  >
-                    <td className="px-4 py-3 font-medium text-white">{p.symbol}</td>
-                    <td className="px-4 py-3 text-zinc-400">{p.name}</td>
-                    <td className="px-4 py-3 text-zinc-300">{p.chainName}</td>
-                    <td className="px-4 py-3 text-zinc-400">{p.originChainName}</td>
-                    <td className="px-4 py-3 text-zinc-500">{p.bridge}</td>
-                    <td className="px-4 py-3 text-zinc-500 font-mono text-xs max-w-[180px] truncate" title={p.type === 'native' ? 'native' : p.address ?? '—'}>
-                      {p.type === 'native' ? 'native' : p.address ?? '—'}
-                    </td>
-                  </tr>
-                ))
+      )}
+
+      {showAddresses && (
+        <div className="pt-4 border-t border-zinc-700 space-y-3">
+          <h3 className="text-sm font-medium text-zinc-300">Addresses</h3>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="rounded border border-zinc-700 bg-[#0A0A0A]/50 p-3">
+              <p className="text-xs text-zinc-500 mb-1">Source</p>
+              <p className="text-zinc-300 font-mono text-sm break-all">
+                {sourceAddress || '—'}
+              </p>
+              {sourceAddress && (
+                <button
+                  type="button"
+                  onClick={() => navigator.clipboard.writeText(sourceAddress)}
+                  className="mt-2 inline-flex items-center gap-1.5 text-xs text-[#CC4420] hover:underline"
+                >
+                  {copySvg}
+                  Copy
+                </button>
               )}
-            </tbody>
-          </table>
+            </div>
+            <div className="rounded border border-zinc-700 bg-[#0A0A0A]/50 p-3">
+              <p className="text-xs text-zinc-500 mb-1">Destination</p>
+              <p className="text-zinc-300 font-mono text-sm break-all">
+                {destAddress || '—'}
+              </p>
+              {destAddress && (
+                <button
+                  type="button"
+                  onClick={() => navigator.clipboard.writeText(destAddress)}
+                  className="mt-2 inline-flex items-center gap-1.5 text-xs text-[#CC4420] hover:underline"
+                >
+                  {copySvg}
+                  Copy
+                </button>
+              )}
+            </div>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
