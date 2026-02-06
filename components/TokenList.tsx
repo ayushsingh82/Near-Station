@@ -24,6 +24,7 @@ export default function TokenList() {
   const [sortKey, setSortKey] = useState<SortKey>('symbol');
   const [sortDir, setSortDir] = useState<SortDir>('asc');
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [tokenSearch, setTokenSearch] = useState('');
 
   useEffect(() => {
     async function fetchTokens() {
@@ -41,8 +42,11 @@ export default function TokenList() {
     fetchTokens();
   }, []);
 
-  const sortedTokens = useMemo(() => {
-    const arr = [...tokens];
+  const filteredAndSortedTokens = useMemo(() => {
+    const search = (tokenSearch || '').trim().toLowerCase();
+    let arr = search
+      ? tokens.filter((t) => (t.symbol || '').toLowerCase().includes(search))
+      : [...tokens];
     arr.sort((a, b) => {
       let va: string | number = a[sortKey] ?? '';
       let vb: string | number = b[sortKey] ?? '';
@@ -56,7 +60,7 @@ export default function TokenList() {
       return sortDir === 'asc' ? c : -c;
     });
     return arr;
-  }, [tokens, sortKey, sortDir]);
+  }, [tokens, sortKey, sortDir, tokenSearch]);
 
   if (loading) {
     return (
@@ -108,7 +112,26 @@ export default function TokenList() {
   );
 
   return (
-    <div className="overflow-x-auto rounded border border-zinc-700">
+    <div className="space-y-3">
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          placeholder="Search by token symbol…"
+          value={tokenSearch}
+          onChange={(e) => setTokenSearch(e.target.value)}
+          className="flex-1 max-w-xs bg-[#0A0A0A] border border-zinc-600 rounded px-3 py-2 text-white text-sm placeholder-zinc-500 focus:border-[#CC4420] focus:outline-none"
+        />
+        {tokenSearch.trim() && (
+          <button
+            type="button"
+            onClick={() => setTokenSearch('')}
+            className="px-2 py-1.5 text-xs text-zinc-400 hover:text-white"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+      <div className="overflow-x-auto rounded border border-zinc-700">
       <table className="w-full text-left text-sm">
         <thead>
           <tr className="border-b border-zinc-700 bg-zinc-900/50">
@@ -119,7 +142,7 @@ export default function TokenList() {
           </tr>
         </thead>
         <tbody>
-          {sortedTokens.slice(0, 50).map((t) => (
+          {filteredAndSortedTokens.slice(0, 50).map((t) => (
             <tr key={t.assetId} className="border-b border-zinc-800 hover:bg-zinc-800/30">
               <td className="px-4 py-3">
                 <span className="font-medium text-white">{t.symbol}</span>
@@ -161,11 +184,15 @@ export default function TokenList() {
           ))}
         </tbody>
       </table>
-      {tokens.length > 50 && (
+      {(tokenSearch.trim() ? filteredAndSortedTokens.length : tokens.length) > 50 && (
         <p className="px-4 py-2 text-zinc-500 text-xs">
-          Showing 50 of {tokens.length} tokens
+          Showing 50 of {tokenSearch.trim() ? filteredAndSortedTokens.length : tokens.length} tokens
         </p>
       )}
+      {tokenSearch.trim() && filteredAndSortedTokens.length === 0 && (
+        <p className="px-4 py-6 text-center text-zinc-500 text-sm">No tokens match &quot;{tokenSearch}&quot;</p>
+      )}
+    </div>
     </div>
   );
 }

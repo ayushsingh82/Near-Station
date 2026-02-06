@@ -20,14 +20,10 @@ const Landing: React.FC = () => {
         </div>
 
         <h1 className="text-6xl md:text-8xl font-semibold font-serif mb-6 leading-tight text-white">
-          Explore <span className="px-2 bg-[#CC4420] text-white">Near</span>.
+          <span className="curved-underline text-white text-[0.85em]">Explore</span> <span className="px-2 bg-[#CC4420] text-white text-[0.85em]">Near intents</span>.
           <br />
-          Launch <span className="px-2 bg-[#CC4420] text-white">Faster</span>.
+          <span className="curved-underline text-white text-[0.85em]">Launch</span> <span className="px-2 bg-[#CC4420] text-white text-[0.85em]">faster</span>.
         </h1>
-
-        <p className="text-lg md:text-xl text-zinc-400 max-w-3xl mx-auto mb-10">
-          Discover real-world applications built on Near. Explore live dapps and intents showcasing privacy-preserving computation and seamless cross-chain experiences.
-        </p>
 
         {/* CTAs */}
         <div className="flex justify-center space-x-4">

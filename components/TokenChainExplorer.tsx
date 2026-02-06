@@ -68,6 +68,30 @@ function getUniqueChains(pairs: SupportedPair[]): string[] {
   return Array.from(set).sort();
 }
 
+const CHAIN_TO_CANONICAL: Record<string, string> = {
+  solana: 'sol',
+  sol: 'sol',
+  ethereum: 'eth',
+  eth: 'eth',
+  'near protocol': 'near',
+  near: 'near',
+};
+
+function toCanonicalChain(name: string): string {
+  const lower = (name || '').toLowerCase().trim();
+  return CHAIN_TO_CANONICAL[lower] ?? lower;
+}
+
+function chainNamesForLookup(canonical: string): string[] {
+  const c = canonical.toLowerCase();
+  const expanded: Record<string, string[]> = {
+    sol: ['sol', 'solana'],
+    eth: ['eth', 'ethereum'],
+    near: ['near', 'near protocol'],
+  };
+  return expanded[c] ?? [c];
+}
+
 export default function TokenChainExplorer() {
   const [schema, setSchema] = useState<TokenListSchema | null>(null);
   const [apiTokens, setApiTokens] = useState<{ symbol: string; blockchain: string; contractAddress?: string }[]>([]);
@@ -113,7 +137,7 @@ export default function TokenChainExplorer() {
 
   const [showFinal, setShowFinal] = useState(false);
 
-  const { tokens, pairs, chainsForToken } = useMemo(() => {
+  const { tokens, pairs, allChains } = useMemo(() => {
     const fromSchema = schema?.tokens?.length
       ? getUniqueTokens(schema.tokens)
       : [];
@@ -136,27 +160,30 @@ export default function TokenChainExplorer() {
     }
     merged.sort((a, b) => a.symbol.localeCompare(b.symbol));
     const pairs = schema?.tokens?.length ? collectPairs(schema.tokens) : [];
-    const allChains = getUniqueChains(pairs);
-    const getChainsForSymbol = (symbol: string) => {
-      if (!symbol) return [];
-      const chainSet = new Set(
-        pairs
-          .filter((p) => p.symbol.toUpperCase() === symbol.toUpperCase())
-          .map((p) => p.chainName)
-      );
-      const list = Array.from(chainSet).sort();
-      return list.length > 0 ? list : allChains;
-    };
-    return { tokens: merged, pairs, allChains, chainsForToken: getChainsForSymbol };
+    const chainsFromSchema = getUniqueChains(pairs);
+    const chainsFromApi = apiTokens
+      .map((t) => t.blockchain)
+      .filter((c): c is string => Boolean(c));
+    const allChainsSet = new Set<string>();
+    for (const c of chainsFromSchema) {
+      allChainsSet.add(toCanonicalChain(c));
+    }
+    for (const c of chainsFromApi) {
+      allChainsSet.add(toCanonicalChain(c));
+    }
+    const allChains = Array.from(allChainsSet).sort((a, b) =>
+      a.localeCompare(b, undefined, { sensitivity: 'base' })
+    );
+    return { tokens: merged, pairs, allChains };
   }, [schema, apiTokens]);
 
   const sourceChains = useMemo(
-    () => (sourceToken ? chainsForToken(sourceToken) : []),
-    [chainsForToken, sourceToken]
+    () => (sourceToken ? allChains : []),
+    [allChains, sourceToken]
   );
   const destChains = useMemo(
-    () => (destToken ? chainsForToken(destToken) : []),
-    [chainsForToken, destToken]
+    () => (destToken ? allChains : []),
+    [allChains, destToken]
   );
 
   const chainMatches = (apiChain: string, selectedChain: string): boolean => {
@@ -176,9 +203,11 @@ export default function TokenChainExplorer() {
 
   const getAddress = (symbol: string, chainName: string): string => {
     const sym = (symbol || '').toUpperCase();
-    const ch = (chainName || '').toLowerCase();
+    const chainAliases = chainNamesForLookup(chainName);
     const p = pairs.find(
-      (x) => x.symbol.toUpperCase() === sym && x.chainName.toLowerCase() === ch
+      (x) =>
+        x.symbol.toUpperCase() === sym &&
+        chainAliases.includes(x.chainName.toLowerCase())
     );
     if (p) return p.type === 'native' ? 'native' : p.address ?? '';
     const fromApi = apiTokens.find(
@@ -260,7 +289,7 @@ export default function TokenChainExplorer() {
               </select>
             </div>
             <div>
-              <label className={labelClass}>2. Chain (where it’s available)</label>
+              <label className={labelClass}>2. Chain</label>
               <select
                 value={sourceChain}
                 onChange={(e) => handleSourceChainChange(e.target.value)}
@@ -270,7 +299,7 @@ export default function TokenChainExplorer() {
                 <option value="">
                   {sourceToken ? 'Select chain' : 'Select token first'}
                 </option>
-                {sourceChains.map((c) => (
+                {sourceChains.map((c: string) => (
                   <option key={c} value={c}>{c}</option>
                 ))}
               </select>
@@ -294,7 +323,7 @@ export default function TokenChainExplorer() {
               </select>
             </div>
             <div>
-              <label className={labelClass}>2. Chain (where it’s available)</label>
+              <label className={labelClass}>2. Chain</label>
               <select
                 value={destChain}
                 onChange={(e) => handleDestChainChange(e.target.value)}
@@ -304,7 +333,7 @@ export default function TokenChainExplorer() {
                 <option value="">
                   {destToken ? 'Select chain' : 'Select token first'}
                 </option>
-                {destChains.map((c) => (
+                {destChains.map((c: string) => (
                   <option key={c} value={c}>{c}</option>
                 ))}
               </select>
@@ -314,13 +343,26 @@ export default function TokenChainExplorer() {
       </div>
 
       {canShowFinal && (
-        <div className="pt-2 border-t border-zinc-700">
+        <div className="pt-2 border-t border-zinc-700 flex items-center gap-3">
           <button
             type="button"
             onClick={() => setShowFinal(true)}
             className="px-4 py-2 rounded bg-[#CC4420] text-white font-medium hover:opacity-90 transition-opacity"
           >
             Final
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setSourceToken('');
+              setSourceChain('');
+              setDestToken('');
+              setDestChain('');
+              setShowFinal(false);
+            }}
+            className="px-4 py-2 rounded border border-zinc-600 text-zinc-300 font-medium hover:bg-zinc-800 transition-colors"
+          >
+            Clear
           </button>
         </div>
       )}
@@ -331,10 +373,10 @@ export default function TokenChainExplorer() {
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="rounded border border-zinc-700 bg-[#0A0A0A]/50 p-3">
               <p className="text-xs text-zinc-500 mb-1">Source</p>
-              <p className="text-zinc-300 font-mono text-sm break-all">
-                {sourceAddress || '—'}
+              <p className={`font-mono text-sm break-all ${sourceAddress ? 'text-zinc-300' : 'text-zinc-500'}`}>
+                {sourceAddress || 'Not available'}
               </p>
-              {sourceAddress && (
+              {sourceAddress ? (
                 <button
                   type="button"
                   onClick={() => navigator.clipboard.writeText(sourceAddress)}
@@ -343,14 +385,18 @@ export default function TokenChainExplorer() {
                   {copySvg}
                   Copy
                 </button>
+              ) : (
+                <p className="mt-1 text-xs text-zinc-500">
+                  {sourceToken} on {sourceChain} not in list
+                </p>
               )}
             </div>
             <div className="rounded border border-zinc-700 bg-[#0A0A0A]/50 p-3">
               <p className="text-xs text-zinc-500 mb-1">Destination</p>
-              <p className="text-zinc-300 font-mono text-sm break-all">
-                {destAddress || '—'}
+              <p className={`font-mono text-sm break-all ${destAddress ? 'text-zinc-300' : 'text-zinc-500'}`}>
+                {destAddress || 'Not available'}
               </p>
-              {destAddress && (
+              {destAddress ? (
                 <button
                   type="button"
                   onClick={() => navigator.clipboard.writeText(destAddress)}
@@ -359,6 +405,10 @@ export default function TokenChainExplorer() {
                   {copySvg}
                   Copy
                 </button>
+              ) : (
+                <p className="mt-1 text-xs text-zinc-500">
+                  {destToken} on {destChain} not in list
+                </p>
               )}
             </div>
           </div>
