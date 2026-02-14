@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "NearIntents-Helper",
+  title: "Near Station",
   description: "Explore Near. Launch Faster.",
 };
 
